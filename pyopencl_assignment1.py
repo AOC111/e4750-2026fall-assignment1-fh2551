@@ -107,7 +107,19 @@ class clModule:
           5. Get the result back to the host with the .get() function.
           6. Stop the total timer.
         """
+        start_time = time.time()
 
+        x_array = cl.array.to_device(self.queue, x)
+        y_array = cl.array.empty_like(x_array)
+
+        evt = self.prg.relu(self.queue, x.shape, None, y_array.data, x_array.data, n)
+        evt.wait()
+
+        y = y_array.get()
+
+        total_time = time.time() - start_time
+
+        kernel_time = (evt.profile.end - evt.profile.start) * 1e-9
         # ============= STUDENT CODE ENDS HERE =============
 
         return y, kernel_time, total_time
@@ -145,6 +157,22 @@ class clModule:
              make sure the copy is finished before you stop the timer.
           7. Stop the total timer.
         """
+        y = np.empty_like(x)
+
+        start_time = time.time()
+
+        mf = cl.mem_flags
+        x_buffer = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=x)
+        y_buffer = cl.Buffer(self.ctx, mf.WRITE_ONLY, y.nbytes)
+
+        evt = self.prg.relu(self.queue, x.shape, None, y_buffer, x_buffer, n)
+        evt.wait()
+        kernel_time = (evt.profile.end - evt.profile.start) * 1e-9
+
+        copy_evt = cl.enqueue_copy(self.queue, y, y_buffer)
+        copy_evt.wait()
+
+        total_time = time.time() - start_time
 
         # ============= STUDENT CODE ENDS HERE =============
 

@@ -48,8 +48,11 @@ __global__ void relu(
     float* out, const float* in, const unsigned int n
 ) {
     // Compute this thread's global index from blockIdx, blockDim, threadIdx.
-
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
     // Write the result: fmaxf() or a ternary comparison both work.
+    if (i<n) {
+    out[i] = in[i] >= 0.0f ? in[i]:0.0f;
+    }
 }
 """
 
@@ -105,6 +108,31 @@ class reluModule:
          11. Compute kernel_time and total_time in SECONDS
              (time_till() gives milliseconds!).
         """
+        y = np.empty_like(x)
+
+        [total_start, total_end, kernel_start, kernel_end] = [cuda.Event() for _ in range(4)]
+
+        relu = self.mod.get_function("relu")
+
+        grid_size = (int(n) + self.block_size - 1) // self.block_size
+
+        total_start.record()
+
+        x_gpu = cuda.mem_alloc(x.nbytes)
+        y_gpu = cuda.mem_alloc(y.nbytes)
+        cuda.memcpy_htod(x_gpu, x)
+
+        kernel_start.record()
+        relu(y_gpu, x_gpu, n, block=(self.block_size, 1, 1), grid=(grid_size, 1))
+        kernel_end.record()
+
+        cuda.memcpy_dtoh(y, y_gpu)
+
+        total_end.record()
+        total_end.synchronize()
+
+        total_time = total_end.time_since(total_start) * 1e-3
+        kernel_time = kernel_end.time_since(kernel_start) * 1e-3
 
         # ============= STUDENT CODE ENDS HERE =============
 
@@ -146,7 +174,28 @@ class reluModule:
           8. Record total_end and synchronize it.
           9. Compute kernel_time and total_time in SECONDS.
         """
+        [total_start, total_end, kernel_start, kernel_end] = [cuda.Event() for _ in range(4)]
 
+        relu = self.mod.get_function("relu")
+
+        grid_size = (int(n) + self.block_size - 1) // self.block_size
+
+        total_start.record()
+
+        x_gpu = gpuarray.to_gpu(x)
+        y_gpu =gpuarray.empty(x_gpu.shape, x_gpu.dtype)
+
+        kernel_start.record()
+        relu(y_gpu, x_gpu, n, block=(self.block_size, 1, 1), grid=(grid_size, 1))
+        kernel_end.record()
+
+        y = y_gpu.get()
+
+        total_end.record()
+        total_end.synchronize()
+
+        total_time = total_end.time_since(total_start) * 1e-3
+        kernel_time = kernel_end.time_since(kernel_start) * 1e-3
         # ============= STUDENT CODE ENDS HERE =============
 
         return y, kernel_time, total_time

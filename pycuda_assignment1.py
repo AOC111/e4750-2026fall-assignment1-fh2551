@@ -47,11 +47,14 @@ CUDA_CODE = """
 __global__ void relu(
     float* out, const float* in, const unsigned int n
 ) {
-    // Compute this thread's global index from blockIdx, blockDim, threadIdx.
+    // Map the current thread to one element of the one-dimensional input.
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    // Write the result: fmaxf() or a ternary comparison both work.
-    if (i<n) {
-    out[i] = in[i] >= 0.0f ? in[i]:0.0f;
+
+    // The final block can contain more threads than elements, so guard the
+    // memory access.  ReLU keeps non-negative values and replaces negatives
+    // with the float literal 0.0f.
+    if (i < n) {
+        out[i] = in[i] >= 0.0f ? in[i] : 0.0f;
     }
 }
 """
@@ -108,29 +111,42 @@ class reluModule:
          11. Compute kernel_time and total_time in SECONDS
              (time_till() gives milliseconds!).
         """
+        # Initialize an empty numpy array y on the host for the result
         y = np.empty_like(x)
 
+        # Create four event objects to count time
         [total_start, total_end, kernel_start, kernel_end] = [cuda.Event() for _ in range(4)]
 
+        # Get the kernel function
         relu = self.mod.get_function("relu")
 
+        # Ceiling division launches enough 256-thread blocks for every element.
+        # The kernel's i < n guard safely disables surplus threads in the last block.
         grid_size = (int(n) + self.block_size - 1) // self.block_size
 
+        # Start total timing before device allocation so allocation and both host/device transfers are included
+        # in the end-to-end measurement.
         total_start.record()
 
+        # Allocate raw device buffers and initialize the input buffer from x.
         x_gpu = cuda.mem_alloc(x.nbytes)
         y_gpu = cuda.mem_alloc(y.nbytes)
         cuda.memcpy_htod(x_gpu, x)
 
+        # Bracket only the asynchronous kernel launch with the kernel event pair.
         kernel_start.record()
         relu(y_gpu, x_gpu, n, block=(self.block_size, 1, 1), grid=(grid_size, 1))
         kernel_end.record()
 
+        # Transfer the result back to host device(CPU)
         cuda.memcpy_dtoh(y, y_gpu)
 
+        # Record the end of the full sequence and synchronize before querying
+        # either event interval; otherwise the GPU work may still be pending.
         total_end.record()
         total_end.synchronize()
 
+        # CUDA event durations are milliseconds; multiply by 1e-3 for seconds.
         total_time = total_end.time_since(total_start) * 1e-3
         kernel_time = kernel_end.time_since(kernel_start) * 1e-3
 
@@ -174,26 +190,37 @@ class reluModule:
           8. Record total_end and synchronize it.
           9. Compute kernel_time and total_time in SECONDS.
         """
+        # Create four event objects to count time
         [total_start, total_end, kernel_start, kernel_end] = [cuda.Event() for _ in range(4)]
 
+        # Reuse the same compiled kernel as the explicit-memory implementation.
         relu = self.mod.get_function("relu")
 
+        # Round up so the grid covers n even when n cannot be divided by block_size.
         grid_size = (int(n) + self.block_size - 1) // self.block_size
 
+        # Begin before gpuarray allocation and transfer so total_time includes the complete operation.
         total_start.record()
 
+        # Move the input to the device with gpuarray.to_gpu() and allocate the output with gpuarray.empty().
         x_gpu = gpuarray.to_gpu(x)
-        y_gpu =gpuarray.empty(x_gpu.shape, x_gpu.dtype)
+        y_gpu = gpuarray.empty(x_gpu.shape, x_gpu.dtype)
 
+        # gpuarray objects expose their device pointers to the CUDA kernel, so
+        # they can be passed directly as the output and input arguments.
         kernel_start.record()
         relu(y_gpu, x_gpu, n, block=(self.block_size, 1, 1), grid=(grid_size, 1))
         kernel_end.record()
 
+        # .get() waits
+        # and returns the completed result as a NumPy array.
         y = y_gpu.get()
 
+        # Synchronize the last total event before reading either elapsed time.
         total_end.record()
         total_end.synchronize()
 
+        # Convert the CUDA event measurements from milliseconds to seconds.
         total_time = total_end.time_since(total_start) * 1e-3
         kernel_time = kernel_end.time_since(kernel_start) * 1e-3
         # ============= STUDENT CODE ENDS HERE =============

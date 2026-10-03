@@ -107,18 +107,27 @@ class clModule:
           5. Get the result back to the host with the .get() function.
           6. Stop the total timer.
         """
+        # Use a host-side wall-clock timer for the complete operation.
         start_time = time.time()
 
+        # Move the input to the device with cl.array.to_device() and allocate the output with cl.array.empty_like().
         x_array = cl.array.to_device(self.queue, x)
         y_array = cl.array.empty_like(x_array)
 
+        # Launch the kernel (self.prg.relu(self.queue, ...)) and keep the event it returns.
         evt = self.prg.relu(self.queue, x.shape, None, y_array.data, x_array.data, n)
+
+        # Kernel launches are asynchronous, so wait before reading profiling
+        # timestamps or copying the output back to the host.
         evt.wait()
 
+        # .get() performs the device-to-host transfer and returns a NumPy array result.
         y = y_array.get()
 
+        # Stop the total timer to compute total time.
         total_time = time.time() - start_time
 
+        # OpenCL event timestamps are in nanoseconds; convert them to seconds.
         kernel_time = (evt.profile.end - evt.profile.start) * 1e-9
         # ============= STUDENT CODE ENDS HERE =============
 
@@ -157,21 +166,33 @@ class clModule:
              make sure the copy is finished before you stop the timer.
           7. Stop the total timer.
         """
+        # Prepare an empty numpy array y on the host for the result.
         y = np.empty_like(x)
 
+        # Use a host-side wall-clock timer for the complete operation.
         start_time = time.time()
 
         mf = cl.mem_flags
+
+        # COPY_HOST_PTR creates the read-only input buffer and initializes it from x.
+        # The write-only output buffer needs bytes as y.
         x_buffer = cl.Buffer(self.ctx, mf.READ_ONLY | mf.COPY_HOST_PTR, hostbuf=x)
         y_buffer = cl.Buffer(self.ctx, mf.WRITE_ONLY, y.nbytes)
 
+        # Launch the kernel (self.prg.relu(self.queue, ...)) and keep the event it returns.
         evt = self.prg.relu(self.queue, x.shape, None, y_buffer, x_buffer, n)
+
+        # Waiting guarantees that the profiling end timestamp is available.
         evt.wait()
+        # OpenCL event timestamps are in nanoseconds; convert them to seconds.
         kernel_time = (evt.profile.end - evt.profile.start) * 1e-9
 
+        # Enqueue the device-to-host copy after the kernel on the same queue.
+        # Explicitly waiting makes sure y is complete before stopping the timer.
         copy_evt = cl.enqueue_copy(self.queue, y, y_buffer)
         copy_evt.wait()
 
+        # Stop the total timer to compute total time.
         total_time = time.time() - start_time
 
         # ============= STUDENT CODE ENDS HERE =============
